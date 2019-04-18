@@ -1,13 +1,15 @@
 use std::net::IpAddr;
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::str::FromStr;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-use blake2b_rs::{Blake2bBuilder};
-use secp256k1::{RecoveryId, Message, RecoverableSignature, key::{PublicKey, SecretKey}};
+use blake2b_rs::Blake2bBuilder;
 use faster_hex::{hex_decode, hex_string};
+use secp256k1::{
+    key::{PublicKey, SecretKey},
+    Message, RecoverableSignature, RecoveryId,
+};
 
-use crate::{SECP256K1, PeerId};
-
+use crate::{PeerId, SECP256K1};
 
 const SEP: char = ';';
 
@@ -15,7 +17,7 @@ const SEP: char = ';';
 // port        : max   5 bytes (65535)
 // peer_id     : max   (32 + 3) * 2 * 0.8 = 56 bytes (base58)
 // valid_until : max   11 bytes (31536000000, 1000 year)
-// signature   : exact 65 * 2 * 0.8 = 104 bytes (base58)
+// signature   : max   65 * 2 * 0.8 = 104 bytes (base58)
 // sep         : exact 4 bytes
 // total       : max   39 + 5 + 56 + 11 + 104 + 4 = 224 bytes
 // txt limit   : 255 bytes (enough)
@@ -30,11 +32,23 @@ pub struct SeedRecord {
 }
 
 impl SeedRecord {
-    pub fn new(ip: IpAddr, port: u16, peer_id: Option<PeerId>, valid_until: u64, pubkey: PublicKey) -> SeedRecord {
-        SeedRecord { ip, port, peer_id, valid_until, pubkey }
+    pub fn new(
+        ip: IpAddr,
+        port: u16,
+        peer_id: Option<PeerId>,
+        valid_until: u64,
+        pubkey: PublicKey,
+    ) -> SeedRecord {
+        SeedRecord {
+            ip,
+            port,
+            peer_id,
+            valid_until,
+            pubkey,
+        }
     }
 
-    pub fn check(&self, pubkey: &PublicKey) -> Result<(), SeedRecordError> {
+    pub fn check(&self) -> Result<(), SeedRecordError> {
         if !is_reachable(self.ip) {
             return Err(SeedRecordError::InvalidIp(self.ip));
         }
@@ -43,17 +57,14 @@ impl SeedRecord {
             return Err(SeedRecordError::InvalidPort(self.port));
         }
 
-        if SystemTime::now().duration_since(UNIX_EPOCH)
+        if SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .expect("Time went backwards")
-            .as_secs() > self.valid_until
+            .as_secs()
+            > self.valid_until
         {
             return Err(SeedRecordError::SeedTimeout);
         }
-
-        if &self.pubkey != pubkey {
-            return Err(SeedRecordError::PublicKeyNotMatch);
-        }
-
         Ok(())
     }
 
@@ -66,8 +77,7 @@ impl SeedRecord {
         let data = Self::data_to_sign(self.ip, self.port, self.peer_id.as_ref(), self.valid_until);
         let hash = blake2b_256(&data);
 
-        let message = Message::from_slice(&hash)
-            .expect("create message error");
+        let message = Message::from_slice(&hash).expect("create message error");
 
         let signature = SECP256K1.sign_recoverable(&message, privkey);
         let (recid, signed_data) = signature.serialize_compact();
@@ -96,8 +106,10 @@ impl SeedRecord {
             .map_err(|_| SeedRecordError::InvalidRecord)?;
         let peer_id_str = parts.next().unwrap();
         let peer_id = if peer_id_str.len() > 0 {
-            Some(PeerId::from_str(peer_id_str) .map_err(|_| SeedRecordError::InvalidRecord)?)
-        } else { None };
+            Some(PeerId::from_str(peer_id_str).map_err(|_| SeedRecordError::InvalidRecord)?)
+        } else {
+            None
+        };
         let valid_until: u64 = parts
             .next()
             .unwrap()
@@ -118,21 +130,30 @@ impl SeedRecord {
 
         let data = Self::data_to_sign(ip, port, peer_id.as_ref(), valid_until);
         let hash = blake2b_256(&data);
-        let message = Message::from_slice(&hash)
-            .expect("create message error");
+        let message = Message::from_slice(&hash).expect("create message error");
 
         if let Ok(pubkey) = SECP256K1.recover(&message, &signature) {
-            Ok(SeedRecord { ip, port, peer_id, valid_until, pubkey })
+            Ok(SeedRecord {
+                ip,
+                port,
+                peer_id,
+                valid_until,
+                pubkey,
+            })
         } else {
             return Err(SeedRecordError::InvalidSignature);
         }
     }
 
-    pub fn decode_with_pubkey(record: &str, pubkey: &PublicKey) -> Result<SeedRecord, SeedRecordError> {
+    pub fn decode_with_pubkey(
+        record: &str,
+        pubkey: &PublicKey,
+    ) -> Result<SeedRecord, SeedRecordError> {
         let seed_record = Self::decode(record)?;
         if &seed_record.pubkey != pubkey {
             Err(SeedRecordError::VerifyFailed(seed_record))
         } else {
+            seed_record.check()?;
             Ok(seed_record)
         }
     }
@@ -157,9 +178,12 @@ impl SeedRecord {
         vec![
             ip.to_string(),
             port.to_string(),
-            peer_id.map(PeerId::to_base58).unwrap_or_else(|| String::new()),
+            peer_id
+                .map(PeerId::to_base58)
+                .unwrap_or_else(|| String::new()),
             valid_until.to_string(),
-        ].join(&SEP.to_string())
+        ]
+        .join(&SEP.to_string())
     }
 }
 
@@ -171,7 +195,6 @@ pub enum SeedRecordError {
     InvalidSignature,
     VerifyFailed(SeedRecord),
     SeedTimeout,
-    PublicKeyNotMatch,
     // Secret not match the public key
     KeyNotMatch,
 }
@@ -239,7 +262,8 @@ mod tests {
     use crate::Generator;
 
     fn now_ts() -> u64 {
-        SystemTime::now().duration_since(UNIX_EPOCH)
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
             .expect("Time went backwards")
             .as_secs()
     }
@@ -260,8 +284,8 @@ mod tests {
         let ret = SeedRecord::decode(record_string.as_str());
         assert!(ret.is_ok());
         let record = ret.unwrap();
-        assert!(record.check(&pub1).is_ok());
-        assert!(record.check(&pub2).is_err());
+        assert!(record.check().is_ok());
+        assert!(record.pubkey() != &pub2);
 
         let ipv6: IpAddr = "2001:0dc5:72a3:0000:0000:802e:3370:73E4".parse().unwrap();
         let record = SeedRecord::new(ipv6, port, peer_id.clone(), valid_until, pub1.clone());

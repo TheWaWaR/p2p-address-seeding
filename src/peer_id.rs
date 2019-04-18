@@ -16,7 +16,6 @@ pub struct PeerId {
 }
 
 impl PeerId {
-
     /// If data is a valid `PeerId`, return `PeerId`, else return error
     pub fn from_bytes(data: Vec<u8>) -> Result<Self, ()> {
         if data.is_empty() {
