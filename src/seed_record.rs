@@ -76,7 +76,6 @@ impl SeedRecord {
 
         let data = Self::data_to_sign(self.ip, self.port, self.peer_id.as_ref(), self.valid_until);
         let hash = blake2b_256(&data);
-
         let message = Message::from_slice(&hash).expect("create message error");
 
         let signature = SECP256K1.sign_recoverable(&message, privkey);
@@ -151,7 +150,7 @@ impl SeedRecord {
     ) -> Result<SeedRecord, SeedRecordError> {
         let seed_record = Self::decode(record)?;
         if &seed_record.pubkey != pubkey {
-            Err(SeedRecordError::VerifyFailed(seed_record))
+            Err(SeedRecordError::VerifyFailed)
         } else {
             seed_record.check()?;
             Ok(seed_record)
@@ -193,7 +192,7 @@ pub enum SeedRecordError {
     InvalidIp(IpAddr),
     InvalidPort(u16),
     InvalidSignature,
-    VerifyFailed(SeedRecord),
+    VerifyFailed,
     SeedTimeout,
     // Secret not match the public key
     KeyNotMatch,
