@@ -2,7 +2,6 @@ use std::net::IpAddr;
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use blake2b_rs::Blake2bBuilder;
 use faster_hex::{hex_decode, hex_string};
 use secp256k1::{
     key::{PublicKey, SecretKey},
@@ -75,7 +74,8 @@ impl SeedRecord {
         }
 
         let data = Self::data_to_sign(self.ip, self.port, self.peer_id.as_ref(), self.valid_until);
-        let hash = blake2b_256(&data);
+        let hash = sha3_256(&data);
+        println!("data: {}, hash: {:?}", data, hash);
         let message = Message::from_slice(&hash).expect("create message error");
 
         let signature = SECP256K1.sign_recoverable(&message, privkey);
@@ -128,7 +128,8 @@ impl SeedRecord {
             .map_err(|_| SeedRecordError::InvalidSignature)?;
 
         let data = Self::data_to_sign(ip, port, peer_id.as_ref(), valid_until);
-        let hash = blake2b_256(&data);
+        let hash = sha3_256(&data);
+        println!("data: {}, hash: {:?}", data, hash);
         let message = Message::from_slice(&hash).expect("create message error");
 
         if let Ok(pubkey) = SECP256K1.recover(&message, &signature) {
@@ -198,14 +199,8 @@ pub enum SeedRecordError {
     KeyNotMatch,
 }
 
-fn blake2b_256<T: AsRef<[u8]>>(s: T) -> [u8; 32] {
-    let mut result = [0u8; 32];
-    let mut blake2b = Blake2bBuilder::new(32)
-        .personal(b"dns-address-seed")
-        .build();
-    blake2b.update(s.as_ref());
-    blake2b.finalize(&mut result);
-    result
+pub fn sha3_256<T: AsRef<[u8]>>(s: T) -> [u8; 32] {
+    tiny_keccak::sha3_256(s.as_ref())
 }
 
 /// Check if the ip address is reachable.

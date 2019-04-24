@@ -5,7 +5,6 @@ use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use blake2b_rs::Blake2bBuilder;
 use chrono::DateTime;
 use clap::{App, Arg, ArgMatches, SubCommand};
 use faster_hex::hex_decode;
@@ -14,7 +13,6 @@ use parity_multiaddr::{Multiaddr, Protocol};
 use rand::Rng;
 use secp256k1::{
     key::{PublicKey, SecretKey},
-    Message, RecoverableSignature, RecoveryId,
 };
 
 mod dns;
@@ -35,6 +33,11 @@ fn main() -> Result<(), Box<Error>> {
         .required(true)
         .takes_value(true)
         .help("Private key file path (64 length hex string)");
+    let arg_pubkey = Arg::with_name("pubkey")
+        .long("pubkey")
+        .takes_value(true)
+        .multiple(true)
+        .help("Public key (128 length hex string)");
 
     let matches = App::new("")
         .subcommand(
@@ -65,13 +68,7 @@ fn main() -> Result<(), Box<Error>> {
         .subcommand(
             SubCommand::with_name("query")
                 .arg(arg_privkey.clone())
-                .arg(
-                    Arg::with_name("pubkey")
-                        .long("pubkey")
-                        .takes_value(true)
-                        .multiple(true)
-                        .help("Public key (128 length hex string)"),
-                )
+                .arg(arg_pubkey.clone())
                 .arg(
                     Arg::with_name("domain")
                         .short("d")
@@ -82,6 +79,18 @@ fn main() -> Result<(), Box<Error>> {
                         .help("The domain for query TXT records"),
                 ),
         )
+        .subcommand(
+            SubCommand::with_name("check")
+                .arg(
+                    Arg::with_name("record")
+                        .short("r")
+                        .long("record")
+                        .required(true)
+                        .takes_value(true)
+                        .help("Seed record")
+                )
+                .arg(arg_pubkey.clone())
+        )
         .get_matches();
     match matches.subcommand() {
         ("generate", Some(sub_matches)) => {
@@ -90,8 +99,11 @@ fn main() -> Result<(), Box<Error>> {
         ("query", Some(sub_matches)) => {
             query(sub_matches)?;
         }
-        _ => {
-            eprintln!("Invalid arguments");
+        ("check", Some(sub_matches)) => {
+            check(sub_matches)?;
+        }
+        (cmd, _args) => {
+            eprintln!("Invalid arguments ({})", cmd);
         }
     }
     Ok(())
@@ -106,6 +118,7 @@ fn generate(matches: &ArgMatches) -> Result<(), Box<Error>> {
     hex_decode(privkey_string.trim().as_bytes(), &mut privkey_bytes)?;
     let privkey = SecretKey::from_slice(&privkey_bytes[..])?;
     let pubkey = PublicKey::from_secret_key(&SECP256K1, &privkey);
+    // println!("pubkey: {:?}", pubkey);
 
     let addr_str = matches.value_of("addr").unwrap();
     let (addr, peer_id) = if let Ok(multiaddr) = Multiaddr::from_str(addr_str) {
@@ -160,7 +173,7 @@ fn generate(matches: &ArgMatches) -> Result<(), Box<Error>> {
     let txt_record = seed_record
         .encode(&privkey)
         .map_err(|err| format!("{:?}", err))?;
-    println!("[TXT record]:\n{}", txt_record);
+    println!("[TXT record]: {}", txt_record);
     Ok(())
 }
 
@@ -169,6 +182,30 @@ fn query(matches: &ArgMatches) -> Result<(), Box<Error>> {
 }
 
 fn check(matches: &ArgMatches) -> Result<(), Box<Error>> {
+    let record_str = matches.value_of("record").unwrap();
+    let mut pubkeys = Vec::new();
+    for pubkey_hex in matches.values_of_lossy("pubkey")
+        .unwrap_or_default()
+        .into_iter()
+    {
+        let mut pubkey_bytes = [4u8; 65];
+        hex_decode(pubkey_hex.as_bytes(), &mut pubkey_bytes[1..65])
+            .map_err(|err| format!("parse key({}) error: {:?}", pubkey_hex, err))?;
+        let pubkey = PublicKey::from_slice(&pubkey_bytes)
+            .map_err(|err| format!("{:?}", err))?;
+        pubkeys.push(pubkey);
+    }
+
+    let record = SeedRecord::decode(record_str)
+        .map_err(|err| format!("decode record failed {:?}", err))?;
+    println!("record: {:?}", record);
+    println!("pubkeys: {:?}", pubkeys);
+    if pubkeys.iter().any(|pubkey| pubkey == record.pubkey()) {
+        println!(">>> Record ok");
+    } else {
+        println!(">>> Invliad record");
+    }
+
     Ok(())
 }
 
