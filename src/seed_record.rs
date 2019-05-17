@@ -1,6 +1,7 @@
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::time::{SystemTime, UNIX_EPOCH};
+use blake2b_rs::{Blake2b, Blake2bBuilder};
 
 use faster_hex::{hex_decode, hex_string};
 use secp256k1::{
@@ -9,6 +10,8 @@ use secp256k1::{
 };
 
 use crate::{PeerId, SECP256K1};
+
+pub const CKB_HASH_PERSONALIZATION: &[u8] = b"ckb-default-hash";
 
 const SEP: char = ';';
 
@@ -74,7 +77,7 @@ impl SeedRecord {
         }
 
         let data = Self::data_to_sign(self.ip, self.port, self.peer_id.as_ref(), self.valid_until);
-        let hash = sha3_256(&data);
+        let hash = blake2b_256(&data);
         println!("data: {}, hash: {:?}", data, hash);
         let message = Message::from_slice(&hash).expect("create message error");
 
@@ -128,7 +131,7 @@ impl SeedRecord {
             .map_err(|_| SeedRecordError::InvalidSignature)?;
 
         let data = Self::data_to_sign(ip, port, peer_id.as_ref(), valid_until);
-        let hash = sha3_256(&data);
+        let hash = blake2b_256(&data);
         println!("data: {}, hash: {:?}", data, hash);
         let message = Message::from_slice(&hash).expect("create message error");
 
@@ -199,8 +202,14 @@ pub enum SeedRecordError {
     KeyNotMatch,
 }
 
-pub fn sha3_256<T: AsRef<[u8]>>(s: T) -> [u8; 32] {
-    tiny_keccak::sha3_256(s.as_ref())
+pub fn blake2b_256<T: AsRef<[u8]>>(s: T) -> [u8; 32] {
+    let mut result = [0u8; 32];
+    let mut blake2b = Blake2bBuilder::new(32)
+        .personal(CKB_HASH_PERSONALIZATION)
+        .build();
+    blake2b.update(s.as_ref());
+    blake2b.finalize(&mut result);
+    result
 }
 
 /// Check if the ip address is reachable.
